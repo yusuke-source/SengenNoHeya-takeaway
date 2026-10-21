@@ -27,7 +27,7 @@
     saveImage: "写真に保存",
     saving: "準備しています…",
     saveReady: "準備できました。もう一度押してください",
-    saveFailed: "保存できませんでした。通信のよい場所でもう一度",
+    saveFailed: "保存できませんでした。画像を長押しするか、下のリンクから開いて保存してください",
     saveOpenTab: "別のタブで開く(共有ボタンから保存できます)"
   };
 
@@ -190,7 +190,7 @@
       busy = true;
       button.disabled = true;
       setNote(null);
-      var ready = file ? Promise.resolve() : (button.textContent = MESSAGES.saving, fetch(url, { mode: "cors", credentials: "omit", referrerPolicy: "no-referrer" }).then(function (response) {
+      var ready = file ? Promise.resolve() : (button.textContent = MESSAGES.saving, fetch(url, { mode: "cors", cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" }).then(function (response) {
         if (!response.ok) throw new Error("http " + response.status);
         return response.blob();
       }).then(function (blob) {
@@ -220,6 +220,7 @@
     img.alt = alt;
     img.decoding = "async";
     img.setAttribute("referrerpolicy", "no-referrer");
+    img.crossOrigin = "anonymous";
     img.addEventListener("error", function () { img.hidden = true; mediaError(block, MESSAGES.imageError); });
     img.src = url;
     block.appendChild(img);
@@ -235,6 +236,7 @@
     video.setAttribute("playsinline", "");
     video.preload = "metadata";
     video.setAttribute("referrerpolicy", "no-referrer");
+    video.crossOrigin = "anonymous";
     if (posterUrl) video.poster = posterUrl;
     var source = el("source");
     source.type = "video/mp4";
