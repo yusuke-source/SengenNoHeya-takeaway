@@ -4,5 +4,5 @@
 window.TAKEAWAY_CONFIG = {
   containerIdentifier: "iCloud.com.gerhard17.SengenNoHeya",
   environment: "production",
-  apiToken: ""
+  apiToken: "102b14fe3dd832d2be5c435f4610479a3bac48d685e5b6fe4402b4d0bd091a17"
 };
