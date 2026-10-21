@@ -21,7 +21,14 @@
     imageError: "画像を読み込めませんでした。もう一度開いてください。",
     videoError: "動画を再生できませんでした。通信のよい場所で、もう一度開いてください。",
     retry: "もう一度読み込む",
-    saveHint: "画像は、長押しすると写真に保存できます。"
+    videoPending: "動画はまだ届いていません。少し待って「もう一度読み込む」を押してください",
+    saveHint: "画像は、長押しすると写真に保存できます。",
+    saveVideo: "動画を保存",
+    saveImage: "写真に保存",
+    saving: "準備しています…",
+    saveReady: "準備できました。もう一度押してください",
+    saveFailed: "保存できませんでした。通信のよい場所でもう一度",
+    saveOpenTab: "別のタブで開く(共有ボタンから保存できます)"
   };
 
   // ---- 純粋な関数(テストしやすいもの) ----
@@ -74,8 +81,10 @@
   function toView(record, nowMs) {
     var fields = (record && record.fields) || {};
     if (isExpired(createdAtMs(fields), typeof nowMs === "number" ? nowMs : Date.now())) return { expired: true };
+    var named = /^item-([0-9a-f]{8})/i.exec(String((record && record.recordName) || ""));
     return {
       expired: false,
+      shortId: named ? named[1].toLowerCase() : "work",
       displayName: text(fields, "displayName"),
       deptName: text(fields, "deptName"),
       declarationText: text(fields, "declarationText"),
@@ -106,12 +115,15 @@
     box.id = "status";
     if (isError) box.setAttribute("role", "alert");
     root.appendChild(box);
-    if (isError) {
-      var button = el("button", "retry", MESSAGES.retry);
-      button.type = "button";
-      button.addEventListener("click", function () { window.location.reload(); });
-      root.appendChild(button);
-    }
+    if (isError) root.appendChild(retryButton());
+  }
+
+  /** 「もう一度読み込む」(ページを読み直す)。 */
+  function retryButton() {
+    var button = el("button", "retry", MESSAGES.retry);
+    button.type = "button";
+    button.addEventListener("click", function () { window.location.reload(); });
+    return button;
   }
 
   function mediaError(parent, message) {
@@ -119,7 +131,89 @@
     parent.appendChild(el("p", "media-error", message));
   }
 
-  function imageBlock(title, url, kind, alt) {
+  /** 保存ボタン。押すと url を取得して File にし、共有シート(navigator.share)で写真アプリへ。
+   *  共有が使えなければ <a download> で保存。取得(CORS・通信)に失敗したら 1 行の失敗表示と「別のタブで開く」リンクを出す。
+   *  iOS の Safari は取得に時間がかかると共有の許可(ボタンを押した直後だけ有効)が切れるので、
+   *  そのときは取得済みのファイルを持ったまま「もう一度押してください」にして、次の 1 回で共有する。 */
+  function saveButton(id, label, url, fileName, mime, block) {
+    var button = el("button", "save", label);
+    button.type = "button";
+    button.id = id;
+    var file = null;
+    var busy = false;
+    var note = null;
+
+    function setNote(message, openUrl) {
+      if (note && note.parentNode) note.parentNode.removeChild(note);
+      note = null;
+      if (!message) return;
+      note = el("p", "media-error save-note", message);
+      note.setAttribute("role", "alert");
+      if (openUrl) {
+        var link = el("a", "save-open", MESSAGES.saveOpenTab);
+        link.href = openUrl;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        note.appendChild(document.createElement("br"));
+        note.appendChild(link);
+      }
+      block.appendChild(note);
+    }
+
+    function download() {
+      var blobUrl = URL.createObjectURL(file);
+      var anchor = document.createElement("a");
+      anchor.href = blobUrl;
+      anchor.download = fileName;
+      anchor.style.display = "none";
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      setTimeout(function () { URL.revokeObjectURL(blobUrl); }, 60000);
+    }
+
+    /** 共有シートを開く。開けた(または保存した)なら true、許可切れなら false。 */
+    function deliver() {
+      var canShare = typeof navigator.share === "function" && typeof navigator.canShare === "function" && navigator.canShare({ files: [file] });
+      if (!canShare) { download(); return Promise.resolve(true); }
+      return navigator.share({ files: [file], title: "宣言の部屋" }).then(function () { return true; }, function (error) {
+        if (error && error.name === "AbortError") return true;          // 共有シートを閉じただけ
+        if (error && error.name === "NotAllowedError") return false;     // 押してから時間が経って許可が切れた
+        throw error;
+      });
+    }
+
+    function done() { busy = false; button.disabled = false; button.textContent = label; }
+
+    button.addEventListener("click", function () {
+      if (busy) return;
+      busy = true;
+      button.disabled = true;
+      setNote(null);
+      var ready = file ? Promise.resolve() : (button.textContent = MESSAGES.saving, fetch(url, { mode: "cors", credentials: "omit", referrerPolicy: "no-referrer" }).then(function (response) {
+        if (!response.ok) throw new Error("http " + response.status);
+        return response.blob();
+      }).then(function (blob) {
+        file = new File([blob], fileName, { type: mime });
+      }).catch(function (error) {
+        error.fetchFailed = true;
+        throw error;
+      }));
+      ready.then(deliver).then(function (shared) {
+        if (shared) { done(); return; }
+        busy = false;
+        button.disabled = false;
+        button.textContent = MESSAGES.saveReady;
+      }).catch(function (error) {
+        if (error && error.fetchFailed) file = null;
+        done();
+        setNote(MESSAGES.saveFailed, error && error.fetchFailed ? url : null);
+      });
+    });
+    return button;
+  }
+
+  function imageBlock(title, url, kind, alt, saveId, fileName) {
     var block = el("section", "block");
     block.appendChild(el("h2", null, title));
     var img = el("img", "media is-" + kind);
@@ -129,10 +223,11 @@
     img.addEventListener("error", function () { img.hidden = true; mediaError(block, MESSAGES.imageError); });
     img.src = url;
     block.appendChild(img);
+    block.appendChild(saveButton(saveId, MESSAGES.saveImage, url, fileName, "image/jpeg", block));
     return block;
   }
 
-  function videoBlock(url, posterUrl) {
+  function videoBlock(url, posterUrl, shortId) {
     var block = el("section", "block");
     block.appendChild(el("h2", null, "動画"));
     var video = el("video", "media");
@@ -148,6 +243,18 @@
     video.appendChild(source);
     video.addEventListener("error", function () { mediaError(block, MESSAGES.videoError); });
     block.appendChild(video);
+    block.appendChild(saveButton("save-video", MESSAGES.saveVideo, url, "sengen-" + shortId + ".mp4", "video/mp4", block));
+    return block;
+  }
+
+  /** 絵はあるのに動画がまだ無いとき(動画を壁面へ送っている途中に読んだ場合など)、動画の見出しの位置に出す 1 行と読み直しボタン。 */
+  function videoPendingBlock() {
+    var block = el("section", "block video-pending");
+    block.appendChild(el("h2", null, "動画"));
+    var note = el("p", "message", MESSAGES.videoPending);
+    note.id = "video-pending";
+    block.appendChild(note);
+    block.appendChild(retryButton());
     return block;
   }
 
@@ -173,9 +280,10 @@
     root.appendChild(who);
 
     var hasMedia = !!(view.videoUrl || view.wallpaperUrl || view.lockscreenUrl);
-    if (view.videoUrl) root.appendChild(videoBlock(view.videoUrl, view.wallpaperUrl));
-    if (view.wallpaperUrl) root.appendChild(imageBlock("絵(壁紙・横)", view.wallpaperUrl, "wallpaper", "あなたの絵(横長)"));
-    if (view.lockscreenUrl) root.appendChild(imageBlock("絵(待受・縦)", view.lockscreenUrl, "lockscreen", "あなたの絵(縦長)"));
+    if (view.videoUrl) root.appendChild(videoBlock(view.videoUrl, view.wallpaperUrl, view.shortId || "work"));
+    else if (view.wallpaperUrl || view.lockscreenUrl) root.appendChild(videoPendingBlock());
+    if (view.wallpaperUrl) root.appendChild(imageBlock("絵(壁紙・横)", view.wallpaperUrl, "wallpaper", "あなたの絵(横長)", "save-wallpaper", "sengen-" + (view.shortId || "work") + "-yoko.jpg"));
+    if (view.lockscreenUrl) root.appendChild(imageBlock("絵(待受・縦)", view.lockscreenUrl, "lockscreen", "あなたの絵(縦長)", "save-lockscreen", "sengen-" + (view.shortId || "work") + "-tate.jpg"));
     if (view.wallpaperUrl || view.lockscreenUrl) root.appendChild(el("p", "hint", MESSAGES.saveHint));
     if (!hasMedia) root.appendChild(el("p", "message is-error", MESSAGES.notFound));
 
